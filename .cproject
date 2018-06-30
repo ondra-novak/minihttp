@@ -69,9 +69,11 @@
                             							
                             <tool id="cdt.managedbuild.tool.gnu.cpp.linker.exe.debug.773035464" name="GCC C++ Linker" superClass="cdt.managedbuild.tool.gnu.cpp.linker.exe.debug">
                                 								
-                                <option id="gnu.cpp.link.option.libs.680038335" superClass="gnu.cpp.link.option.libs" useByScannerDiscovery="false" valueType="libs">
+                                <option id="gnu.cpp.link.option.libs.680038335" name="Libraries (-l)" superClass="gnu.cpp.link.option.libs" useByScannerDiscovery="false" valueType="libs">
                                     									
                                     <listOptionValue builtIn="false" value="pthread"/>
+                                    									
+                                    <listOptionValue builtIn="false" value="stdc++fs"/>
                                     								
                                 </option>
                                 								
@@ -175,9 +177,11 @@
                             							
                             <tool id="cdt.managedbuild.tool.gnu.cpp.linker.exe.release.241958687" name="GCC C++ Linker" superClass="cdt.managedbuild.tool.gnu.cpp.linker.exe.release">
                                 								
-                                <option id="gnu.cpp.link.option.libs.343484773" superClass="gnu.cpp.link.option.libs" valueType="libs">
+                                <option id="gnu.cpp.link.option.libs.343484773" name="Libraries (-l)" superClass="gnu.cpp.link.option.libs" valueType="libs">
                                     									
                                     <listOptionValue builtIn="false" value="pthread"/>
+                                    									
+                                    <listOptionValue builtIn="false" value="stdc++fs"/>
                                     								
                                 </option>
                                 								
@@ -255,7 +259,21 @@
     	
     <storageModule moduleId="org.eclipse.cdt.core.LanguageSettingsProviders"/>
     	
-    <storageModule moduleId="refreshScope"/>
+    <storageModule moduleId="refreshScope" versionNumber="2">
+        		
+        <configuration configurationName="Debug">
+            			
+            <resource resourceType="PROJECT" workspacePath="/minihttp"/>
+            		
+        </configuration>
+        		
+        <configuration configurationName="Release">
+            			
+            <resource resourceType="PROJECT" workspacePath="/minihttp"/>
+            		
+        </configuration>
+        	
+    </storageModule>
     	
     <storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
     
