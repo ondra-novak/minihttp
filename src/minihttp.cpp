@@ -21,6 +21,7 @@ namespace {
 //deklarace nejakych opakujicih se konstant
 static const char* APPLICATION_OCTET_STREAM = "application/octet-stream";
 static const char* TEXT_HTML_CHARSET_UTF_8 = "text/html;charset=utf-8";
+static const char* SERVICE_SUFFIX = ".service";
 
 //Typ TextPair jednoduse obsahuje par dvou retezcu
 //hodi se na key-hodnota zaznamy
@@ -147,6 +148,9 @@ template<typename T> T *pointer_raii_traits_t<T>::null = nullptr;
 static const int invalid_descriptor = -1;
 ///deklarace Socket, ktery je identifikova hodnotou typu int, zavira se funkci close a neplatna hodnota je -1
 using Socket = RAII<int, decltype(&close), &close, &invalid_descriptor>;
+///deklarace FileDesc, je stejná jako socket na linuxu, ale na jiný platformě může být jinak
+using FileDesc = Socket;
+
 ///deklarace AddrInfo, jako RAII typu addrinfo *, zavira se funkci freeaddrinfo a neplatnou hodnotou je nullptr
 using AddrInfo = RAII<addrinfo *, decltype(&freeaddrinfo), &freeaddrinfo, &pointer_raii_traits_t<addrinfo>::null>;
 
@@ -429,7 +433,7 @@ protected:
 	 * @param closeconn true, pokud se ma hlasit zavreni spojeni (prida Connection:close)
 	 */
 	template<typename Iterable>
-	void send_response(int code, const std::string_view &message, std::string_view &httpver, Iterable &&beg, Iterable &&end, bool closeconn=false);
+	void send_response(int code, const std::string_view &message, const std::string_view &httpver, Iterable &&beg, Iterable &&end, bool closeconn=false);
 
 	///Deklarace typu, ktery predstavuje hlavicky zadane pomoci slozenych zavorek {}
 	using InlineHeaders = std::initializer_list<TextPair>;
@@ -442,7 +446,7 @@ protected:
 	 * @param hdrs hlavicky jako initializer list
 	 * @param closeconn true, pokud se ma hlasit zavreni spojeni (prida Connection:close)
 	 */
-	void send_response(int code, const std::string_view &message, std::string_view &httpver, InlineHeaders hdrs, bool closeconn=false) {
+	void send_response(int code, const std::string_view &message, const std::string_view &httpver, InlineHeaders hdrs, bool closeconn=false) {
 		send_response(code,message, httpver, hdrs.begin(), hdrs.end(), closeconn);
 	}
 	///Odesle error stranku
@@ -452,7 +456,7 @@ protected:
 	 * @param message status message
 	 * @param httpver verze protokolu
 	 */
-	void send_error(int code, const std::string_view &message, std::string_view &httpver);
+	void send_error(int code, const std::string_view &message, const std::string_view &httpver);
 
 	///Funkce bezpecne mapuje uri na cestu do document root
 	/**
@@ -479,6 +483,8 @@ protected:
 	 */
 	static std::string_view determine_content_type(const std::string_view &fpath);
 
+	void run_script(const std::string &fpath, const std::string &cmd, const std::string &uri, const std::string_view &proto);
+
 private:
 };
 
@@ -498,6 +504,141 @@ void Server::run() noexcept {
 	}
 }
 
+/*static bool is_file_executable(const std::string &fpath) {
+	//under linux, permissions are tested whether to file has executable flag
+	//under windows, there might be test, whether fpath.exe or fpath.bat exists, and if does, it is executable
+
+	return access(fpath.c_str(), X_OK) == 0;
+}
+*/
+struct Pipe {
+	FileDesc rd;
+	FileDesc wr;
+};
+
+static auto create_pipe() {
+	int fds[2];
+	if (pipe2(fds, O_CLOEXEC)) throw ErrNoException("Cannot create pipe");
+	return Pipe{fds[0],fds[1]};
+}
+
+static void trim(std::string_view &x) {
+  while (!x.empty() && isspace(x[0])) x.remove_prefix(1);
+  while (!x.empty() && isspace(x[x.length()-1])) x.remove_suffix(1);
+}
+
+static bool cmp_icase(const std::string_view &x,const std::string_view &y) {
+
+	return ( (x.size() == y.size()) &&
+				 std::equal(x.begin(), x.end(), y.begin(), [](char a, char b) {return toupper(a) == toupper(b);}));
+}
+
+static auto spawn_process(const std::string &fpath, const std::string &cmd, const std::string &uri) {
+
+	auto std_in = create_pipe();
+	auto std_out = create_pipe();
+	auto err_nfo = create_pipe();
+	int e;
+
+	int r = fork();
+	if (r == -1) throw ErrNoException("Failed to spawn process  (fork failed)");
+	if (r == 0) {
+
+		dup2(std_in.rd, 0);
+		dup2(std_out.wr, 1);
+		const char *const  args[] = {fpath.c_str(), cmd.c_str(), uri.c_str(), 0};
+		execvp(fpath.c_str(),const_cast<char *const *>(args));
+		e = errno;
+		e = write(err_nfo.wr,&e,sizeof(e));
+		err_nfo.wr.close();
+		_exit(e);
+	}
+
+	err_nfo.wr.close();
+	if (read(err_nfo.rd, &e, sizeof(e)) == sizeof(e)) {
+		throw ErrNoException("Failed to spawn process (execvp failed)");
+	}
+
+	return Pipe{std::move(std_out.rd), std::move(std_in.wr)};
+}
+
+
+
+
+void Server::run_script(const std::string &fpath, const std::string &cmd, const std::string &uri, const std::string_view &proto) {
+
+	Pipe p = spawn_process(fpath, cmd, uri);
+	//vyjimky odchytni dale
+	try {
+		std::string_view key, value;
+		std::size_t ctxlen = 0;
+		do {
+			//cti zbyvajici radky hlavicky - pri konci streamu zahod request
+			if (!conn.read_line(ln)) return;
+
+			if (write(p.wr,ln.data(), ln.length()) == -1) throw ErrNoException("Writing data");
+			if (write(p.wr,"\n",1) == -1) throw ErrNoException("Writing data");
+			SplitString(ln, ":", 2)(key)(value);
+			trim(key);
+			trim(value);
+			if (cmp_icase(key,std::string_view("Content-Length"))) {
+				ctxlen = std::strtol(value.data(),0,10);
+			}
+
+		} while (!ln.empty());
+
+		if (write(p.wr,"\n",1) == -1) throw ErrNoException("Writing data");
+
+		while (ctxlen) {
+			auto buffer = conn.read();
+			if (buffer.length() > ctxlen) {
+				conn.put_back(buffer.substr(ctxlen));
+				buffer = buffer.substr(0, ctxlen);
+			}
+			if (write(p.wr,buffer.data(), buffer.length()) == -1) throw ErrNoException("Writing data");
+			ctxlen-=buffer.length();
+		}
+		p.wr.close();
+		char buffer[1024];
+		int processed = read(p.rd, buffer,1024);
+
+		std::string_view hdrresp;
+		{
+			std::string_view hdr(buffer,processed);
+			auto pos = hdr.find("\r\n");
+			if (pos != hdr.npos) hdrresp = hdr.substr(0,pos);
+		}
+		log(cmd, " " , uri, " ", hdrresp, " (service: ", fpath,")");
+
+
+		while (processed) {
+			if (processed == -1) throw ErrNoException("reading");
+			conn.write(std::string_view(buffer,processed));
+			processed = read(p.rd, buffer,1024);
+		}
+
+
+	} catch (std::exception &e) {
+		//vsechny vyjimky zaloguj
+		log("Exception: ", e.what(), "(path: '", fpath,"' )");
+		//pokud nebyly odeslany hlavicky, vygeneruj error stranku 404 (maskujeme interni chyba)
+		send_error(500,"Internal server error",proto);
+		//ukonci spojeni
+	}
+
+
+}
+
+static auto extract_service_name(const std::string_view &fpath) {
+	std::string_view svcsfx(SERVICE_SUFFIX);
+	auto pos = fpath.find(svcsfx);
+	if (pos == fpath.npos) return std::pair(std::string_view(), fpath);
+	else {
+		pos += svcsfx.length();
+		return std::pair(fpath.substr(0,pos), fpath.substr(pos));
+	}
+}
+
 bool Server::run_1cycle(){
 	//precti prvni radku (request line), pokud selze, ukonci to
 
@@ -510,6 +651,21 @@ bool Server::run_1cycle(){
 
 	//rozparsuj request line: command,mezera,uri,mezera,protocol
 	SplitString(hdrln," ",3)(cmd)(uri)(proto);
+
+	std::string fpath;
+	//mapuj uri na soubor
+	fpath = map_uri_to_path(uri);
+
+	auto svcinfo = extract_service_name(fpath);
+
+	if (!svcinfo.first.empty()) {
+
+		run_script(std::string(svcinfo.first), std::string(cmd), std::string(svcinfo.second), proto);
+		return false;
+	}
+
+
+
 	//tento server umi jen GET pozadavek, ostatni vyhod jako 405
 	if (cmd != "GET") {
 		send_error(405,"Method Not Allowed",proto);
@@ -517,7 +673,6 @@ bool Server::run_1cycle(){
 		return false;
 	}
 	//ulozeni cesty
-	std::string fpath;
 	//info o tom, ze hlavicky jiz byly odeslany
 	bool headers_sent = false;
 
@@ -530,8 +685,6 @@ bool Server::run_1cycle(){
 			//opakuj, dokud neni nalezena prazdna radka
 		} while (!ln.empty());
 
-		//mapuj uri na soubor
-		fpath = map_uri_to_path(uri);
 
 		//vyber content type
 		std::string_view content_type = determine_content_type(fpath);
@@ -609,7 +762,7 @@ bool Server::run_1cycle(){
 
 template<typename Iterable>
 inline void Server::send_response(int code, const std::string_view& message,
-		std::string_view& httpver, Iterable&& beg, Iterable&& end,
+		const std::string_view& httpver, Iterable&& beg, Iterable&& end,
 		bool closeconn) {
 	//v tehle funkci vytvorime hlavicky a odesleme je na klienta
 	//pouziva se outbuff coz je std::string
@@ -641,10 +794,10 @@ inline void Server::send_response(int code, const std::string_view& message,
 	conn.write(outbuff);
 
 	//zaloguj vyrizeny request
-	log(hdrln, "(",code,")");
+	log(hdrln, " (",code,")");
 }
 
-inline void Server::send_error(int code, const std::string_view& message, std::string_view& httpver) {
+inline void Server::send_error(int code, const std::string_view& message, const std::string_view& httpver) {
 	//vygeneruje error stranku
 	//odesli hlavicky
 	send_response(code, message, httpver, {

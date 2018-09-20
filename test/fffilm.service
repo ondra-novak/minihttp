@@ -1,0 +1,4 @@
+#!/bin/bash
+
+`dirname $0`/proxy.service.inc http://www.fffilm.name $*
+
