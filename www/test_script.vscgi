@@ -11,6 +11,11 @@ else
     echo "args: $*"
     echo ""
     
+	temp_file=$(mktemp)
     
-   cat
+    cat > $temp_file
+    
+    cat $temp_file
+    
+    rm $temp_file
 fi
