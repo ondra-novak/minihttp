@@ -46,20 +46,25 @@ Po prázdné řádce ukončené znakem LF začíná tělo požadavku. Pro jednod
 
 **VSCGI script by měl vždy načíst celý request, než začne posílat odpověď**
 
+Nendodržením této podmínky může dojít k deadlocku zvlášť u velkých requestů
+
 Odpověď musí začínát status řádkou HTTP. Za ní by měla následovat hlavička Content-Type a pak další hlavičky. Za poslední hlavičkou je třeba udělat prázdnou řádku a to i v případě, že odpověď nenese žádné tělo (třeba při redirectu)
 
 ```
-HTTP/1.1 200 OK
-Content-Type: text/html
-
-<html><head>....
+echo "HTTP/1.1 200 OK"
+echo "Content-Type: text/html"
+echo ""
+echo "<html><head>...."
 ```
+
+V hlavičkové části je povoleno používat pouhé LF jako oddělovač řádků, protože http je server sám nahradí za CRLF. 
+(Řádky mohou být oddělený jak samotným LF tak CRLF - http server přebytečné CR odstraní z řádky a následně řádku zapíše s ukončovacím CRLF)
 
 ## Limity protokolu VSCGI
 
  - požadavky POST a PUT musí mít Content-Length. Není podporován chunked encoding v requestu
  - request zpracovaný VSCGI nepodporuje keep-alive
- - websockety nefungují protože, že request je třeba celý načíst než lze odeslat odpověď. Tento způsob komunikace nevyhovuje 
+ - websockety nefungují protože, je nutné request celý načíst než lze odeslat odpověď. Tento způsob komunikace nevyhovuje 
  websocketům.
  
 ## Možnosti
