@@ -21,7 +21,7 @@ namespace {
 //deklarace nejakych opakujicih se konstant
 static const char* APPLICATION_OCTET_STREAM = "application/octet-stream";
 static const char* TEXT_HTML_CHARSET_UTF_8 = "text/html;charset=utf-8";
-static const char* SERVICE_SUFFIX = ".service";
+static const char* VSCGI_SUFFIX = ".vscgi";
 
 //Typ TextPair jednoduse obsahuje par dvou retezcu
 //hodi se na key-hodnota zaznamy
@@ -71,12 +71,14 @@ template<typename ... Args> void log(Args && ... args );
  * @tparam CloseFn typ zaviraci funkce, mel by to byt pointer
  * @tparam pointer na zaviraci funkci. Tato funkce musi mit external linkage
  * @tparam invval pointer na promennou, ktera obsahuje neplatnou hodnotu, musi mit external linkage
+ * @tparam Tag Umozni odlisit dva typy, pokud maji stejnou deklaraci. Pokud maji odlisny tak, pak C++
+ *  je bere jako samostatne typy
  *
  * Objekt typu RAII predstavuje jednu instanci posixoveho objektu. Nelze jej kopirovat, pouze stehovat
  * pres pravou referenci &&, tim padem i vrace z funkce
  *
  */
-template<typename T, typename CloseFn, CloseFn closeFn, const T *invval>
+template<typename T, typename CloseFn, CloseFn closeFn, const T *invval, class Tag = void>
 class RAII {
 public:
 	///Inicializuje na neplatnou hodnotu
@@ -147,9 +149,11 @@ template<typename T> T *pointer_raii_traits_t<T>::null = nullptr;
 ///hodnota pro invalid descriptor (external linkage)
 static const int invalid_descriptor = -1;
 ///deklarace Socket, ktery je identifikova hodnotou typu int, zavira se funkci close a neplatna hodnota je -1
-using Socket = RAII<int, decltype(&close), &close, &invalid_descriptor>;
+class SocketDescTag;
+using Socket = RAII<int, decltype(&close), &close, &invalid_descriptor, SocketDescTag>;
 ///deklarace FileDesc, je stejná jako socket na linuxu, ale na jiný platformě může být jinak
-using FileDesc = Socket;
+class FileDescTag;
+using FileDesc = RAII<int, decltype(&close), &close, &invalid_descriptor, FileDescTag>;
 
 ///deklarace AddrInfo, jako RAII typu addrinfo *, zavira se funkci freeaddrinfo a neplatnou hodnotou je nullptr
 using AddrInfo = RAII<addrinfo *, decltype(&freeaddrinfo), &freeaddrinfo, &pointer_raii_traits_t<addrinfo>::null>;
@@ -208,10 +212,24 @@ static Socket open_port(const std::string_view &portdef) {
 	return sock;
 }
 
+static int stream_read(const Socket &sock, char *buffer, std::size_t size) {
+	return recv(sock,buffer,size,0);
+}
+static int stream_write(const Socket &sock, const std::string_view &buffer) {
+	return send(sock,buffer.data(),buffer.length(),0);
+}
+static int stream_read(const FileDesc &sock, char *buffer, std::size_t size) {
+	return read(sock,reinterpret_cast<unsigned char *>(buffer),size);
+}
+static int stream_write(const FileDesc &sock, const std::string_view &buffer) {
+	return write(sock, reinterpret_cast<const unsigned char *>(buffer.data()),buffer.length());
+}
+
 ///Predstavuje otevrenou konekci
 /** pro zkonstruovani potrebuje otevreny socket, zaroven ho prebira do vlastnictvi
  *  slouzi k snadnemu cteni a zapisu. Obsahuje cteci buffer
  *  */
+template<typename Socket = Socket>
 class Conn {
 public:
 	///konstruktor
@@ -243,7 +261,8 @@ public:
 	 * @retval true nactena radka
 	 * @retval false konec streamu, vic uz toho neni (druha strana zavrela spojeni)
 	 */
-	bool read_line(std::string &ln);
+	bool read_line(std::string &ln, const std::string_view &sep = "\r\n");
+
 
 	///vraci referenci na aktivni socket
 	const Socket &get_socket() const {return sock;}
@@ -261,9 +280,12 @@ protected:
 };
 
 //socket je presunut do Conn
-Conn::Conn(Socket &&sock):sock(std::move(sock)) {}
+template<typename Socket>
+Conn<Socket>::Conn(Socket &&sock):sock(std::move(sock)) {}
 
-std::string_view Conn::read() {
+
+template<typename Socket>
+std::string_view Conn<Socket>::read() {
 	//pokud je vracen put_back buffer...
 	if (!put_back_buff.empty()) {
 		//tak se vyda jako vysledek
@@ -274,7 +296,7 @@ std::string_view Conn::read() {
 	} else {
 		//pokud neni put_back_buffer
 		//pak nacti vse co jde do interniho bufferu
-		int r = recv(sock,reinterpret_cast<unsigned char *>(buffer),sizeof(buffer),0);
+		int r = stream_read(sock,buffer,sizeof(buffer));
 		//pores jakekoliv chyby vyjimkou
 		if (r < 0)
 			throw ErrNoException("read failed");
@@ -285,12 +307,14 @@ std::string_view Conn::read() {
 		return out;
 	}
 }
-void Conn::put_back(const std::string_view &buff) {
+template<typename Socket>
+void Conn<Socket>::put_back(const std::string_view &buff) {
 	//vraceni buffer je primitivni
 	put_back_buff = buff;
 }
 
-bool Conn::read_line(std::string &ln) {
+template<typename Socket>
+bool Conn<Socket>::read_line(std::string &ln, const std::string_view &sep) {
 	//cteni cele radky
 	//nejprve smaz radku
 	ln.clear();
@@ -306,16 +330,16 @@ bool Conn::read_line(std::string &ln) {
 		//hledame dvojznak konce radky
 		auto startpos = ln.length();
 		//protoze je to dvojznak, je treba zacit o jeden znak drive, nez je konec predchozich dat
-		if (startpos) startpos--;
+		if (startpos>=sep.length()-1) startpos-=sep.length()-1;
 		//pridej nactena data na konec radky (pripadne se nam spoji \r z predchoziho cteni a \n nasledujiciho cteni)
 		ln.append(data);
 		//najdi pozici \r\n od startpos
-		nwln = ln.find("\r\n",startpos);
+		nwln = ln.find(sep,startpos);
 		//opakuj cteni, dokud neni nalezeno
 	} while (nwln == ln.npos);
 	//spocti jakou cast dat navic jsme precetli
 	//tento remain buffer se ale bere jako substr z data,
-	auto remain = data.substr(data.length()-(ln.length() - nwln - 2));
+	auto remain = data.substr(data.length()-(ln.length() - nwln - sep.length()));
 	//vrat ho do streamu
 	put_back(remain);
 	//orizni data radky tak, aby tam nebyl znak konce radky
@@ -324,9 +348,10 @@ bool Conn::read_line(std::string &ln) {
 	return true;
 }
 
-void Conn::write(const std::string_view &data) {
+template<typename Socket>
+void Conn<Socket>::write(const std::string_view &data) {
 	//zapis co to da
-	int r = send(sock, reinterpret_cast<const unsigned char *>(data.data()), data.length(), 0);
+	int r = stream_write(sock, data);
 	//pokud se nezapsalo nic, tak to potichu ignoruj (co s tim?)
 	if (r < 1) return;
 	//pokud zbylo neco, co se nezapsalo
@@ -407,7 +432,7 @@ public:
 
 
 protected:
-	Conn conn;			///< connection
+	Conn<Socket> conn;			///< connection
 	std::string docroot; ///< aktualni document root
 	std::string hdrln; ///< radka obsahujici hlavick pozadavku (buffer)
 	std::string ln;    ///< buffer pro radku zbyvajicich hlavicek
@@ -483,7 +508,7 @@ protected:
 	 */
 	static std::string_view determine_content_type(const std::string_view &fpath);
 
-	void run_script(const std::string &fpath, const std::string &cmd, const std::string &uri, const std::string_view &proto);
+	int run_vscgi(const std::string &fpath, const std::string &cmd, const std::string &uri, const std::string &proto);
 
 private:
 };
@@ -533,7 +558,7 @@ static bool cmp_icase(const std::string_view &x,const std::string_view &y) {
 				 std::equal(x.begin(), x.end(), y.begin(), [](char a, char b) {return toupper(a) == toupper(b);}));
 }
 
-static auto spawn_process(const std::string &fpath, const std::string &cmd, const std::string &uri) {
+static auto spawn_process(const std::string &fpath, const std::string &cmd, const std::string &uri, const std::string &proto) {
 
 	auto std_in = create_pipe();
 	auto std_out = create_pipe();
@@ -546,7 +571,7 @@ static auto spawn_process(const std::string &fpath, const std::string &cmd, cons
 
 		dup2(std_in.rd, 0);
 		dup2(std_out.wr, 1);
-		const char *const  args[] = {fpath.c_str(), cmd.c_str(), uri.c_str(), 0};
+		const char *const  args[] = {fpath.c_str(), cmd.c_str(), uri.c_str(), proto.c_str(), 0};
 		execvp(fpath.c_str(),const_cast<char *const *>(args));
 		e = errno;
 		e = write(err_nfo.wr,&e,sizeof(e));
@@ -563,60 +588,96 @@ static auto spawn_process(const std::string &fpath, const std::string &cmd, cons
 }
 
 
+static void fix_line(std::string &str) {
+	if (!str.empty() && str[str.length()-1] == '\r') str.pop_back();
+}
 
+static void extract_keyvalue(const std::string &ln, std::string_view &key, std::string_view &value) {
+	SplitString(ln, ":", 2)(key)(value);
+	trim(key);
+	trim(value);
+}
 
-void Server::run_script(const std::string &fpath, const std::string &cmd, const std::string &uri, const std::string_view &proto) {
+int Server::run_vscgi(const std::string &fpath, const std::string &cmd, const std::string &uri, const std::string &proto) {
 
-	Pipe p = spawn_process(fpath, cmd, uri);
+	int istatus = 0;
+
 	//vyjimky odchytni dale
 	try {
+
+		if (!std::experimental::filesystem::is_regular_file(fpath)) return -1;
+		Pipe p = spawn_process(fpath, cmd, uri, proto);
+		static const std::string_view nwln("\n");
 		std::string_view key, value;
-		std::size_t ctxlen = 0;
-		do {
-			//cti zbyvajici radky hlavicky - pri konci streamu zahod request
-			if (!conn.read_line(ln)) return;
 
-			if (write(p.wr,ln.data(), ln.length()) == -1) throw ErrNoException("Writing data");
-			if (write(p.wr,"\n",1) == -1) throw ErrNoException("Writing data");
-			SplitString(ln, ":", 2)(key)(value);
-			trim(key);
-			trim(value);
-			if (cmp_icase(key,std::string_view("Content-Length"))) {
-				ctxlen = std::strtol(value.data(),0,10);
-			}
-
-		} while (!ln.empty());
-
-		if (write(p.wr,"\n",1) == -1) throw ErrNoException("Writing data");
-
-		while (ctxlen) {
-			auto buffer = conn.read();
-			if (buffer.length() > ctxlen) {
-				conn.put_back(buffer.substr(ctxlen));
-				buffer = buffer.substr(0, ctxlen);
-			}
-			if (write(p.wr,buffer.data(), buffer.length()) == -1) throw ErrNoException("Writing data");
-			ctxlen-=buffer.length();
-		}
-		p.wr.close();
-		char buffer[1024];
-		int processed = read(p.rd, buffer,1024);
-
-		std::string_view hdrresp;
 		{
-			std::string_view hdr(buffer,processed);
-			auto pos = hdr.find("\r\n");
-			if (pos != hdr.npos) hdrresp = hdr.substr(0,pos);
+			Conn<FileDesc> writter(std::move(p.wr));
+
+			std::size_t ctxlen = 0;
+			do {
+				//cti zbyvajici radky hlavicky - pri konci streamu zahod request
+				if (!conn.read_line(ln)) return 0;
+				writter.write(ln);
+				writter.write(nwln);
+				extract_keyvalue(ln,key,value);
+				if (cmp_icase(key,std::string_view("Content-Length"))) {
+					ctxlen = std::strtol(value.data(),0,10);
+				}
+
+			} while (!ln.empty());
+			writter.write(nwln);
+
+			while (ctxlen) {
+				auto buffer = conn.read();
+				if (buffer.length() > ctxlen) {
+					conn.put_back(buffer.substr(ctxlen));
+					buffer = buffer.substr(0, ctxlen);
+				}
+				writter.write(buffer);
+				ctxlen-=buffer.length();
+			}
 		}
-		log(cmd, " " , uri, " ", hdrresp, " (service: ", fpath,")");
 
 
-		while (processed) {
-			if (processed == -1) throw ErrNoException("reading");
-			conn.write(std::string_view(buffer,processed));
-			processed = read(p.rd, buffer,1024);
+		{
+			Conn<FileDesc> reader(std::move(p.rd));
+			std::string_view proto, status, statusmsg;
+			if (!reader.read_line(ln, nwln)) return 0;
+			fix_line(ln);
+
+			SplitString(ln," ",3)(proto)(status)(statusmsg);
+
+
+			if (proto.substr(0,6) != "HTTP/1" || strtol(status.data(),0,10) < 100 || statusmsg.empty()) {
+				conn.write(proto);
+				conn.write(" 200 OK\r\n");
+				status = "200";
+			}
+
+			istatus = (int)strtol(status.data(),0,10);
+
+			if (ln.empty()) {
+				conn.write("Content-Type: text/plain; charset=utf-8\r\n");
+			}
+
+			while (!ln.empty()) {
+				extract_keyvalue(ln,key,value);
+				if (!cmp_icase(key,std::string_view("Connection"))) {
+					conn.write(ln);
+					conn.write("\r\n");
+				}
+				if (!reader.read_line(ln, nwln)) return true;
+				fix_line(ln);
+			}
+			conn.write("Connection: close\r\n");
+			conn.write("\r\n");
+
+			std::string_view b = reader.read();
+			while (!b.empty()) {
+				conn.write(b);
+				b = reader.read();
+			}
 		}
-
 
 	} catch (std::exception &e) {
 		//vsechny vyjimky zaloguj
@@ -625,17 +686,22 @@ void Server::run_script(const std::string &fpath, const std::string &cmd, const 
 		send_error(500,"Internal server error",proto);
 		//ukonci spojeni
 	}
+	return istatus;
 
 
 }
 
 static auto extract_service_name(const std::string_view &fpath) {
-	std::string_view svcsfx(SERVICE_SUFFIX);
+	std::string_view svcsfx(VSCGI_SUFFIX);
 	auto pos = fpath.find(svcsfx);
 	if (pos == fpath.npos) return std::pair(std::string_view(), fpath);
 	else {
 		pos += svcsfx.length();
-		return std::pair(fpath.substr(0,pos), fpath.substr(pos));
+		if (pos >= fpath.length() || fpath[pos] == '/') {
+			return std::pair(fpath.substr(0,pos), fpath.substr(pos));
+		} else {
+			return  std::pair(std::string_view(), fpath);
+		}
 	}
 }
 
@@ -652,17 +718,28 @@ bool Server::run_1cycle(){
 	//rozparsuj request line: command,mezera,uri,mezera,protocol
 	SplitString(hdrln," ",3)(cmd)(uri)(proto);
 
-	std::string fpath;
-	//mapuj uri na soubor
-	fpath = map_uri_to_path(uri);
 
-	auto svcinfo = extract_service_name(fpath);
+
+	std::string fpath;
+
+	auto svcinfo = extract_service_name(uri);
 
 	if (!svcinfo.first.empty()) {
 
-		run_script(std::string(svcinfo.first), std::string(cmd), std::string(svcinfo.second), proto);
-		return false;
+		fpath = map_uri_to_path(svcinfo.first);
+		int status = run_vscgi(fpath, std::string(cmd), std::string(svcinfo.second), std::string(proto));
+		if (status >= 0) {
+			log(hdrln, " (",status,") - via: ", fpath);
+			return false;
+		}
+
+
 	}
+
+	//mapuj uri na soubor
+	fpath = map_uri_to_path(uri);
+
+
 
 
 

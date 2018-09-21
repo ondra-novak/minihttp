@@ -12,6 +12,8 @@ if [[ "$2" != "GET" && "$2" != "POST" && "$2" != "PUT" ]]; then
 fi
 	
 
+REJECT=0
+
 HDRS=("-H" "Connection: close")
 
 function rdheaders() {
@@ -20,11 +22,14 @@ function rdheaders() {
 
    read l
    while [[ "$l" != "" ]]; do
-	if [[ "${l:0:5}" != "Host:" && "${l:0:11}" != "Connection:"  && "${l:0:8}" != "Upgrade:" ]] ; then
+	if [[ "${l:0:5}" != "Host:" && "${l:0:11}" != "Connection:" ]] ; then
 			HDRS[$POS]="-H"
 			POS=$((POS + 1))
 		   	HDRS[$POS]="$l"
 			POS=$((POS + 1))
+	fi
+	if [[ "${l:0:8}" == "Upgrade:" ]] ; then
+		REJECT=1
 	fi
 	read l
 
@@ -47,6 +52,12 @@ function processresponse() {
 }
 
 rdheaders
+
+if [[ $REJECT == 1 ]] ; then
+	echo "HTTP/1.0 403 Forbidden"
+	echo ""
+	exit
+fi
 
 cat | curl -s -i -X $2 "${HDRS[@]}" -d @- "$1$3" | processresponse
 

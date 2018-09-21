@@ -1,0 +1,12 @@
+body {
+	
+	text-align: center;
+	font-family: sans-serif;
+	
+}
+
+iframe {
+	width: 90%;
+	height: 300px;
+	border: 0px;
+}

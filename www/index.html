@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Minihttp server demo page</title>
+<link rel="stylesheet" type="text/css" href="style.css">
+</head>
+<body>
+<h1>Minihttp server demo page</h1>
+
+<h2>It works!</h2>
+
+
+<h3>Test image</h3>
+
+<img src="img/test_image.jpg">
+
+<h3>VSCGI</h3>
+
+<iframe src="test_script.vscgi" name="win"></iframe>
+
+<h3>Test forms (VSCGI)</h3>
+
+<form method="POST" action="test_script.vscgi/form" target="win" enctype='multipart/form-data'>
+Field:<br><input type="text" name="field" value=""><br>
+Textarea: <br><textarea rows="3" cols="80" name="textarea"></textarea><br>
+File:<br><input type="file" name="file">
+<input type="submit">
+
+</form>
+
+
+</body>
+</html>

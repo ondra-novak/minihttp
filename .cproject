@@ -38,7 +38,7 @@
 							</tool>
 						</toolChain>
 					</folderInfo>
-					<fileInfo id="cdt.managedbuild.toolchain.gnu.base.1531815242.1216526328" name="test_script" rcbsApplicability="disable" resourcePath="test/test_script" toolsToInvoke=""/>
+					<fileInfo id="cdt.managedbuild.toolchain.gnu.base.1531815242.1216526328" name="test_script" rcbsApplicability="disable" resourcePath="test/test_script.vscgi" toolsToInvoke=""/>
 				</configuration>
 			</storageModule>
 			<storageModule moduleId="org.eclipse.cdt.core.externalSettings"/>
