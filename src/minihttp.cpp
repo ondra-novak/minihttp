@@ -666,7 +666,7 @@ int Server::run_vscgi(const std::string &fpath, const std::string &cmd, const st
 					conn.write(ln);
 					conn.write("\r\n");
 				}
-				if (!reader.read_line(ln, nwln)) return true;
+				if (!reader.read_line(ln, nwln)) return istatus;
 				fix_line(ln);
 			}
 			conn.write("Connection: close\r\n");
