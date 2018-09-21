@@ -20,7 +20,7 @@ Napsal Ondrej Novak
 
 # VSCGI
 
-Zkratka VSCGI představuje Very Stupid Common Gate Interface. Myšlenka je podobná jako u CGI, pouze toto rozhraní je mnohem jednodušší a hloupější. Nicméně nabízí plnou kontrolu nad zpracováním jednotlivého requestu pomocí skriptu (bash scriptu) nebo externího programu. 
+Zkratka VSCGI představuje **Very Stupid Common Gate Interface**. Myšlenka je podobná jako u CGI, pouze toto rozhraní je mnohem jednodušší a hloupější. Nicméně nabízí plnou kontrolu nad zpracováním jednotlivého requestu pomocí skriptu (bash scriptu) nebo externího programu. 
 
 ## Použití VSCGI
 
