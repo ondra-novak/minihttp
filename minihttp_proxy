@@ -1,20 +1,19 @@
 #!/bin/bash
 
 if [[ "$1" == "" || "$1" == "-h" ]]; then
+	echo ""
 	echo "Provides upstream proxy for minihttp server"
 	echo
 	echo "usage:"
 	echo "	$0 <url> <method> <path> <protocol>"
 	echo "	$0 create <path> <url>"
 	echo ""
-	echo "For method 'create' you can supply path to file acting as proxy,"
-	echo "and target url"
+	echo "For method 'create' you can supply path to file acting as proxy endpoint,"
 	echo
 	echo "The new proxy endpoint will be created for you. The path must"
 	echo "contain name of the endpoint but without extensoin .vscgi"
 	echo "" 
-	echo "Otherwise the program expects request following specification"
-	echo "of the VSCGI protocol."
+	echo "Otherwise the program expects a request which follows the VSCGI specification"
 	exit 1
 fi
 
@@ -83,7 +82,7 @@ if [[ $REJECT == 1 ]] ; then
 	exit
 fi
 
-cat | curl -s -i -X $2 "${HDRS[@]}" -d @- "$1$3" | processresponse
+curl -s -i -X $2 "${HDRS[@]}" -d @- "$1$3" | processresponse
 
 
 
