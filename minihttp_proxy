@@ -1,0 +1,89 @@
+#!/bin/bash
+
+if [[ "$1" == "" || "$1" == "-h" ]]; then
+	echo "Provides upstream proxy for minihttp server"
+	echo
+	echo "usage:"
+	echo "	$0 <url> <method> <path> <protocol>"
+	echo "	$0 create <path> <url>"
+	echo ""
+	echo "For method 'create' you can supply path to file acting as proxy,"
+	echo "and target url"
+	echo
+	echo "The new proxy endpoint will be created for you. The path must"
+	echo "contain name of the endpoint but without extensoin .vscgi"
+	echo "" 
+	echo "Otherwise the program expects request following specification"
+	echo "of the VSCGI protocol."
+	exit 1
+fi
+
+if [[ "$1" == "create" ]]; then
+	SCRIPTNAME=$2.vscgi
+	echo "$0 \"$3\" \$*" > $SCRIPTNAME
+	chmod +x $SCRIPTNAME
+	exit 0
+fi
+	
+	
+
+
+shopt -s nocasematch
+
+if [[ "$2" != "GET" && "$2" != "POST" && "$2" != "PUT" ]]; then
+	echo "HTTP/1.0 405 Method not allowed";
+	echo ""
+	exit
+fi
+	
+
+REJECT=0
+
+
+function rdheaders() {
+	
+   POS=0
+
+   read l
+   while [[ "$l" != "" ]]; do
+	if [[ "${l:0:5}" != "Host:" && "${l:0:11}" != "Connection:" ]] ; then
+			HDRS[$POS]="-H"
+			POS=$((POS + 1))
+		   	HDRS[$POS]="$l"
+			POS=$((POS + 1))
+	fi
+	if [[ "${l:0:8}" == "Upgrade:" ]] ; then
+		REJECT=1
+	fi
+	read l
+
+   done	
+
+}
+
+function processresponse() {
+
+  read l
+  while [[ "$l" != "" && "$l" != $'\r' ]] ; do
+	if [[ "${l:0:18}" != "Transfer-Encoding:" ]] ; then
+		echo $l	
+	fi
+	read l
+  done
+  echo
+  cat
+
+}
+
+rdheaders
+
+if [[ $REJECT == 1 ]] ; then
+	echo "HTTP/1.0 403 Forbidden"
+	echo ""
+	exit
+fi
+
+cat | curl -s -i -X $2 "${HDRS[@]}" -d @- "$1$3" | processresponse
+
+
+

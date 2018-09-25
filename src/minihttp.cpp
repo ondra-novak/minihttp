@@ -673,7 +673,7 @@ Server::CGIStatus Server::run_vscgi(const std::string &fpath, const std::string 
 			SplitString(ln," ",3)(proto2)(status)(statusmsg);
 
 
-			if (proto.substr(0,6) != "HTTP/1" || strtol(status.data(),0,10) < 100 || statusmsg.empty()) {
+			if (proto2.substr(0,6) != "HTTP/1" || status.empty() || strtol(status.data(),0,10) < 100 || statusmsg.empty()) {
 				conn.write(proto);
 				conn.write(" 200 OK\r\n");
 				istatus = 200;
