@@ -14,11 +14,10 @@ fi
 
 REJECT=0
 
-HDRS=("-H" "Connection: close")
 
 function rdheaders() {
 	
-   POS=2
+   POS=0
 
    read l
    while [[ "$l" != "" ]]; do

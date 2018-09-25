@@ -360,6 +360,7 @@ void Conn<Socket>::write(const std::string_view &data) {
 	if (!more_data.empty()) write(more_data);
 }
 
+
 ///Trida SplitString funguje jako statefull funkce, ktera rozreze string separatorem a postupne vraci jeho casti
 class SplitString {
 public:
@@ -508,7 +509,19 @@ protected:
 	 */
 	static std::string_view determine_content_type(const std::string_view &fpath);
 
-	int run_vscgi(const std::string &fpath, const std::string &cmd, const std::string &uri, const std::string &proto);
+	struct CGIStatus {
+		enum Status{
+			ignore,
+			close_conn,
+			keep_alive
+		};
+		Status status;
+		int code;
+
+		CGIStatus(Status status, int code = 0):status(status),code(code) {}
+	};
+
+	CGIStatus run_vscgi(const std::string &fpath, const std::string &cmd, const std::string &uri, const std::string &proto);
 
 private:
 };
@@ -529,13 +542,7 @@ void Server::run() noexcept {
 	}
 }
 
-/*static bool is_file_executable(const std::string &fpath) {
-	//under linux, permissions are tested whether to file has executable flag
-	//under windows, there might be test, whether fpath.exe or fpath.bat exists, and if does, it is executable
 
-	return access(fpath.c_str(), X_OK) == 0;
-}
-*/
 struct Pipe {
 	FileDesc rd;
 	FileDesc wr;
@@ -598,14 +605,30 @@ static void extract_keyvalue(const std::string &ln, std::string_view &key, std::
 	trim(value);
 }
 
-int Server::run_vscgi(const std::string &fpath, const std::string &cmd, const std::string &uri, const std::string &proto) {
+static const char *fastHex(std::size_t sz, char *buffer, std::size_t buffer_len) {
+	static char hch[] = "0123456789ABCDEF";
+	char *c = buffer+buffer_len-1;
+	*c = 0;
+	if (sz == 0) {
+		*(c--) = '0';
+	} else {
+		while (sz) {
+			*(--c) = hch[sz%16];
+			sz/=16;
+		}
+	}
+	return c;
+
+}
+
+Server::CGIStatus Server::run_vscgi(const std::string &fpath, const std::string &cmd, const std::string &uri, const std::string &proto) {
 
 	int istatus = 0;
 
 	//vyjimky odchytni dale
 	try {
 
-		if (!std::experimental::filesystem::is_regular_file(fpath)) return -1;
+		if (!std::experimental::filesystem::is_regular_file(fpath)) return CGIStatus(CGIStatus::ignore);
 		Pipe p = spawn_process(fpath, cmd, uri, proto);
 		static const std::string_view nwln("\n");
 		std::string_view key, value;
@@ -616,7 +639,7 @@ int Server::run_vscgi(const std::string &fpath, const std::string &cmd, const st
 			std::size_t ctxlen = 0;
 			do {
 				//cti zbyvajici radky hlavicky - pri konci streamu zahod request
-				if (!conn.read_line(ln)) return 0;
+				if (!conn.read_line(ln)) return CGIStatus(CGIStatus::close_conn);
 				writter.write(ln);
 				writter.write(nwln);
 				extract_keyvalue(ln,key,value);
@@ -628,7 +651,7 @@ int Server::run_vscgi(const std::string &fpath, const std::string &cmd, const st
 			writter.write(nwln);
 
 			while (ctxlen) {
-				auto buffer = conn.read();
+					auto buffer = conn.read();
 				if (buffer.length() > ctxlen) {
 					conn.put_back(buffer.substr(ctxlen));
 					buffer = buffer.substr(0, ctxlen);
@@ -639,22 +662,31 @@ int Server::run_vscgi(const std::string &fpath, const std::string &cmd, const st
 		}
 
 
+		bool chunked = 	proto == "HTTP/1.1";
+
 		{
 			Conn<FileDesc> reader(std::move(p.rd));
-			std::string_view proto, status, statusmsg;
-			if (!reader.read_line(ln, nwln)) return 0;
+			std::string_view proto2, status, statusmsg;
+			if (!reader.read_line(ln, nwln)) return CGIStatus(CGIStatus::close_conn);;
 			fix_line(ln);
 
-			SplitString(ln," ",3)(proto)(status)(statusmsg);
+			SplitString(ln," ",3)(proto2)(status)(statusmsg);
 
 
 			if (proto.substr(0,6) != "HTTP/1" || strtol(status.data(),0,10) < 100 || statusmsg.empty()) {
 				conn.write(proto);
 				conn.write(" 200 OK\r\n");
-				status = "200";
+				istatus = 200;
+			} else {
+				conn.write(proto);
+				conn.write(" ");
+				conn.write(status);
+				conn.write(" ");
+				conn.write(statusmsg);
+				conn.write(" 200 OK\r\n");
+				istatus = (int)strtol(status.data(),0,10);
+				if (!reader.read_line(ln, nwln)) return CGIStatus(CGIStatus::close_conn);;
 			}
-
-			istatus = (int)strtol(status.data(),0,10);
 
 			if (ln.empty()) {
 				conn.write("Content-Type: text/plain; charset=utf-8\r\n");
@@ -662,21 +694,39 @@ int Server::run_vscgi(const std::string &fpath, const std::string &cmd, const st
 
 			while (!ln.empty()) {
 				extract_keyvalue(ln,key,value);
-				if (!cmp_icase(key,std::string_view("Connection"))) {
+				bool iste = chunked && cmp_icase(key,"Transfer-Encoding");
+				if (!cmp_icase(key,"Connection") && !iste) {
 					conn.write(ln);
 					conn.write("\r\n");
+				}  else if (iste) {
+					chunked = false;
 				}
-				if (!reader.read_line(ln, nwln)) return istatus;
+				if (!reader.read_line(ln, nwln)) return CGIStatus(CGIStatus::close_conn,istatus);
 				fix_line(ln);
 			}
-			conn.write("Connection: close\r\n");
+			if (chunked) conn.write("Transfer-Encoding: chunked\r\n");
+			else conn.write("Connection: close\r\n");
 			conn.write("\r\n");
 
-			std::string_view b = reader.read();
-			while (!b.empty()) {
-				conn.write(b);
-				b = reader.read();
+			if (chunked) {
+				std::string_view b = reader.read();
+				while (!b.empty()) {
+					char smallBuff[100];
+					conn.write(fastHex(b.length(),smallBuff,sizeof(smallBuff)));
+					conn.write("\r\n");
+					conn.write(b);
+					conn.write("\r\n");
+					b = reader.read();
+				}
+				conn.write("0\r\n\r\n");
+			} else {
+				std::string_view b = reader.read();
+				while (!b.empty()) {
+					conn.write(b);
+					b = reader.read();
+				}
 			}
+			return CGIStatus(chunked?CGIStatus::keep_alive:CGIStatus::close_conn, istatus);
 		}
 
 	} catch (std::exception &e) {
@@ -685,10 +735,8 @@ int Server::run_vscgi(const std::string &fpath, const std::string &cmd, const st
 		//pokud nebyly odeslany hlavicky, vygeneruj error stranku 404 (maskujeme interni chyba)
 		send_error(500,"Internal server error",proto);
 		//ukonci spojeni
+		return CGIStatus(CGIStatus::close_conn, 500);
 	}
-	return istatus;
-
-
 }
 
 static auto extract_service_name(const std::string_view &fpath) {
@@ -727,10 +775,10 @@ bool Server::run_1cycle(){
 	if (!svcinfo.first.empty()) {
 
 		fpath = map_uri_to_path(svcinfo.first);
-		int status = run_vscgi(fpath, std::string(cmd), std::string(svcinfo.second), std::string(proto));
-		if (status >= 0) {
-			log(hdrln, " (",status,") - via: ", fpath);
-			return false;
+		auto status = run_vscgi(fpath, std::string(cmd), std::string(svcinfo.second), std::string(proto));
+		if (status.status != CGIStatus::ignore) {
+			log(hdrln, " (",status.code,")");
+			return status.status == CGIStatus::keep_alive;
 		}
 
 
