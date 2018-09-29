@@ -1,4 +1,4 @@
 #!/bin/bash
 
-`dirname $0`/proxy.vscgi.inc http://www.fffilm.name $*
+./minihttp_proxy http://www.fffilm.name $*
 
