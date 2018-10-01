@@ -48,7 +48,7 @@ Po prázdné řádce ukončené znakem LF začíná tělo požadavku. Pro jednod
 
 Nendodržením této podmínky může dojít k deadlocku zvlášť u velkých requestů
 
-Odpověď musí začínát status řádkou HTTP. Za ní by měla následovat hlavička Content-Type a pak další hlavičky. Za poslední hlavičkou je třeba udělat prázdnou řádku a to i v případě, že odpověď nenese žádné tělo (třeba při redirectu)
+Odpověď musí začínat status řádkou HTTP. Za ní by měla následovat hlavička Content-Type a pak další hlavičky. Za poslední hlavičkou je třeba udělat prázdnou řádku a to i v případě, že odpověď nenese žádné tělo (třeba při redirectu)
 
 ```
 echo "HTTP/1.1 200 OK"
