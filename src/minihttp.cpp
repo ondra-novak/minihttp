@@ -494,6 +494,8 @@ protected:
 	 */
 	std::string map_uri_to_path(const std::string_view &uri);
 
+	std::string map_uri_to_path2(const std::string_view &uri);
+
 	///Rychla funkce k prevodu celeho kladneho cisla na retezec
 	/**
 	 * @param number cislo k prevodu
@@ -941,6 +943,13 @@ inline void Server::send_error(int code, const std::string_view& message, const 
 }
 
 std::string Server::map_uri_to_path(const std::string_view& uri) {
+	//odstrani query z URI
+	auto q = uri.find('?');
+	if (q == uri.npos) return map_uri_to_path2(uri);
+	else return map_uri_to_path2(uri.substr(0,q));
+}
+std::string Server::map_uri_to_path2(const std::string_view& uri) {
+
 	//mapovani uri na cestu
 	//pouzijeme jeden z docasnych bufferu - pravdepodobne uz ma neco predalokovano
 	tmpln.clear();
